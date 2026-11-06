@@ -1,0 +1,1 @@
+console.log("Aqua Galaxy JavaScript loaded successfully!");

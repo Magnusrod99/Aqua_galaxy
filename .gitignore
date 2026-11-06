@@ -1,0 +1,30 @@
+x   
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+vendor/
+
+# XAMPP and temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+# Temporary backups
+*.bak
+*.old
+
+# Local database files
+*.sqlite
+*.db
+
+# PHP session files
+session/
