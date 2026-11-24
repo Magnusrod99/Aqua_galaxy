@@ -1,7 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+:root {
+    --primary-blue: #0a6cf0;
+    --primary-dark: #06264d;
+    --cyan-accent: #22b8e8;
+    --bg-light: #f6faff;
+    --card-border: #e2eaf5;
+}
+
 html {
     scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
 }
 
 body {
-    font-family: Arial, sans-serif;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #f8fbff;
+    color: #0c2342;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Glassmorphism Accents */
+.glass-nav {
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.glass-card {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(226, 234, 245, 0.8);
+}
+
+/* Mobile Floating Bottom Dock */
+.mobile-dock {
+    position: fixed;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    left: 14px;
+    right: 14px;
+    z-index: 60;
+    display: flex;
+    gap: 10px;
+}
+
+.mobile-dock a {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 48px;
+    border-radius: 9999px;
+    font-weight: 700;
+    font-size: 14px;
+    color: #ffffff;
+    box-shadow: 0 10px 25px -5px rgba(6, 38, 77, 0.35);
+    transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.mobile-dock a:active {
+    transform: scale(0.97);
+}
+
+@media (min-width: 768px) {
+    .mobile-dock {
+        display: none !important;
+    }
+}
+
+/* Gentle Card Lift */
+.card-hover {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 16px 32px -8px rgba(6, 38, 77, 0.12);
+}
+
+/* Subtle badge animations */
+@keyframes pulseGlow {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.badge-glow {
+    animation: pulseGlow 3s infinite ease-in-out;
 }
