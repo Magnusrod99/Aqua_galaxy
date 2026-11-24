@@ -1,353 +1,124 @@
-
 <?php
+require_once __DIR__ . '/admin_header.php';
+$pageTitle = 'Dashboard | Aqua Galaxy Admin';
+$currentPage = 'dashboard';
 
-session_start();
-
-require_once __DIR__ . "/../config/app.php";
-
-if (!isset($_SESSION["admin_id"])) {
-    header("Location: " . BASE_URL . "/admin/login.php");
-    exit;
-}
-
-require_once __DIR__ . "/../config/database.php";
-
-$pageTitle = "Admin Dashboard | Aqua Galaxy";
-
-// Get live counts from the existing database tables
-$counts = [
-    "fish" => 0,
-    "products" => 0,
-    "aquarium_services" => 0,
-    "tailoring_services" => 0,
-    "enquiries" => 0,
-];
-
+// ── Live stats ──────────────────────────────────────────────
+$stats = ['fish' => 0, 'categories' => 0, 'products' => 0,
+          'tailoring' => 0, 'gallery' => 0, 'enquiries' => 0];
 try {
-    $counts["fish"] = (int) $pdo
-        ->query("SELECT COUNT(*) FROM fish")
-        ->fetchColumn();
-
-    $counts["products"] = (int) $pdo
-        ->query("SELECT COUNT(*) FROM aquarium_products")
-        ->fetchColumn();
-
-    $counts["aquarium_services"] = (int) $pdo
-        ->query("SELECT COUNT(*) FROM aquarium_services")
-        ->fetchColumn();
-
-    $counts["tailoring_services"] = (int) $pdo
-        ->query("SELECT COUNT(*) FROM tailoring_services")
-        ->fetchColumn();
-
-    $counts["enquiries"] = (int) $pdo
-        ->query("SELECT COUNT(*) FROM enquiries WHERE status = 'new'")
-        ->fetchColumn();
-
+    $stats['fish']       = (int)$pdo->query("SELECT COUNT(*) FROM fish")->fetchColumn();
+    $stats['categories'] = (int)$pdo->query("SELECT COUNT(*) FROM fish_categories")->fetchColumn();
+    $stats['products']   = (int)$pdo->query("SELECT COUNT(*) FROM aquarium_products")->fetchColumn();
+    $stats['tailoring']  = (int)$pdo->query("SELECT COUNT(*) FROM tailoring_services")->fetchColumn();
+    $stats['gallery']    = (int)$pdo->query("SELECT COUNT(*) FROM gallery")->fetchColumn();
+    $stats['enquiries']  = (int)$pdo->query("SELECT COUNT(*) FROM enquiries WHERE status='new'")->fetchColumn();
 } catch (PDOException $e) {
-    error_log("Dashboard count query failed: " . $e->getMessage());
+    error_log('Dashboard stats error: ' . $e->getMessage());
 }
 
-require_once __DIR__ . "/../includes/header.php";
+// ── Recent fish ─────────────────────────────────────────────
+$recentFish = [];
+try {
+    $recentFish = $pdo->query("SELECT f.name, fc.name AS category, f.price_min, f.price_max, f.created_at
+                               FROM fish f LEFT JOIN fish_categories fc ON f.category_id=fc.id
+                               ORDER BY f.created_at DESC LIMIT 5")->fetchAll();
+} catch (PDOException $e) {}
 
+include __DIR__ . '/admin_layout_head.php';
 ?>
 
-<div class="min-h-screen bg-slate-50">
-
-    <!-- Top Bar -->
-    <header class="bg-white border-b border-slate-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
-
-            <a href="<?= BASE_URL ?>/admin/dashboard.php"
-               class="flex items-center gap-3 min-w-0">
-
-                <div class="w-10 h-10 shrink-0 rounded-full bg-sky-100 border-2 border-sky-300 flex items-center justify-center text-2xl">
-                    🐟
-                </div>
-
-                <div class="min-w-0">
-                    <h1 class="font-bold text-lg sm:text-xl text-slate-900">
-                        Aqua <span class="text-sky-500">Galaxy</span>
-                    </h1>
-                    <p class="text-xs text-slate-500">
-                        Administration Panel
-                    </p>
-                </div>
-            </a>
-
-            <div class="flex items-center gap-3">
-
-                <span class="hidden sm:block text-sm text-slate-600">
-                    <?= htmlspecialchars(
-                        $_SESSION["admin_name"] ?? "Admin",
-                        ENT_QUOTES,
-                        "UTF-8"
-                    ) ?>
-                </span>
-
-                <form action="<?= BASE_URL ?>/admin/logout.php" method="POST">
-                    <button
-                        type="submit"
-                        class="bg-red-50 hover:bg-red-100 text-red-600 px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition"
-                    >
-                        Log Out
-                    </button>
-                </form>
-
-            </div>
-        </div>
-    </header>
-
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-
-        <!-- Welcome Section -->
-        <section class="mb-8">
-            <h2 class="text-2xl sm:text-3xl font-bold text-slate-900">
-                Dashboard Overview
-            </h2>
-
-            <p class="mt-2 text-slate-500">
-                Welcome back,
-                <?= htmlspecialchars(
-                    $_SESSION["admin_name"] ?? "Admin",
-                    ENT_QUOTES,
-                    "UTF-8"
-                ) ?>!
-                Here's your Aqua Galaxy website summary.
-            </p>
-        </section>
-
-        <!-- Summary Cards -->
-        <section class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
-
-            <!-- Fish Count -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm text-slate-500">Ornamental Fish</p>
-                        <p class="text-3xl font-bold text-slate-900 mt-2">
-                            <?= $counts["fish"] ?>
-                        </p>
-                    </div>
-
-                    <div class="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center text-2xl">
-                        🐠
-                    </div>
-                </div>
-
-                <p class="text-xs text-slate-500 mt-4">
-                    Total fish records
-                </p>
-            </div>
-
-            <!-- Product Count -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm text-slate-500">Aquarium Products</p>
-                        <p class="text-3xl font-bold text-slate-900 mt-2">
-                            <?= $counts["products"] ?>
-                        </p>
-                    </div>
-
-                    <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl">
-                        🪸
-                    </div>
-                </div>
-
-                <p class="text-xs text-slate-500 mt-4">
-                    Total product records
-                </p>
-            </div>
-
-            <!-- Aquarium Services Count -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm text-slate-500">Aquarium Services</p>
-                        <p class="text-3xl font-bold text-slate-900 mt-2">
-                            <?= $counts["aquarium_services"] ?>
-                        </p>
-                    </div>
-
-                    <div class="w-12 h-12 bg-cyan-100 rounded-xl flex items-center justify-center text-2xl">
-                        🫧
-                    </div>
-                </div>
-
-                <p class="text-xs text-slate-500 mt-4">
-                    Total service records
-                </p>
-            </div>
-
-            <!-- Tailoring Services Count -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm text-slate-500">Tailoring Services</p>
-                        <p class="text-3xl font-bold text-slate-900 mt-2">
-                            <?= $counts["tailoring_services"] ?>
-                        </p>
-                    </div>
-
-                    <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">
-                        ✂️
-                    </div>
-                </div>
-
-                <p class="text-xs text-slate-500 mt-4">
-                    Total service records
-                </p>
-            </div>
-
-            <!-- New Enquiries Count -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm text-slate-500">New Enquiries</p>
-                        <p class="text-3xl font-bold text-slate-900 mt-2">
-                            <?= $counts["enquiries"] ?>
-                        </p>
-                    </div>
-
-                    <div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center text-2xl">
-                        📩
-                    </div>
-                </div>
-
-                <p class="text-xs text-slate-500 mt-4">
-                    Awaiting your attention
-                </p>
-            </div>
-
-        </section>
-
-        <!-- Website Management -->
-        <section class="mt-10">
-
-            <div class="mb-5">
-                <h2 class="text-xl font-bold text-slate-900">
-                    Website Management
-                </h2>
-
-                <p class="text-sm text-slate-500 mt-1">
-                    Manage your Aqua Galaxy website from one place.
-                </p>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-
-                <!-- Fish Management: Connected -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:shadow-md hover:border-sky-300 transition">
-                    <div class="text-2xl mb-3">🐠</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Fish Management
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Manage fish listings and fish categories.
-                    </p>
-
-                    <a
-                        href="<?= BASE_URL ?>/admin/fish.php"
-                        class="inline-flex items-center gap-2 mt-5 bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
-                    >
-                        Manage Fish
-                        <span aria-hidden="true">&rarr;</span>
-                    </a>
-                </div>
-
-                <!-- Product Management -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                    <div class="text-2xl mb-3">🪸</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Product Management
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Manage aquarium products and categories.
-                    </p>
-
-                    <span class="inline-block mt-5 text-sm text-slate-400">
-                        Coming next
-                    </span>
-                </div>
-
-                <!-- Aquarium Services -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                    <div class="text-2xl mb-3">🫧</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Aquarium Services
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Manage aquarium cleaning and other services.
-                    </p>
-
-                    <span class="inline-block mt-5 text-sm text-slate-400">
-                        Coming next
-                    </span>
-                </div>
-
-                <!-- Tailoring Services -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                    <div class="text-2xl mb-3">✂️</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Tailoring Services
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Manage tailoring services and descriptions.
-                    </p>
-
-                    <span class="inline-block mt-5 text-sm text-slate-400">
-                        Coming next
-                    </span>
-                </div>
-
-                <!-- Gallery -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                    <div class="text-2xl mb-3">🖼️</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Gallery
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Organize aquarium and tailoring photos.
-                    </p>
-
-                    <span class="inline-block mt-5 text-sm text-slate-400">
-                        Coming next
-                    </span>
-                </div>
-
-                <!-- Customer Enquiries -->
-                <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-                    <div class="text-2xl mb-3">📩</div>
-
-                    <h3 class="font-bold text-slate-900">
-                        Customer Enquiries
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Review messages submitted by customers.
-                    </p>
-
-                    <span class="inline-block mt-5 text-sm text-slate-400">
-                        Coming next
-                    </span>
-                </div>
-
-            </div>
-        </section>
-
-    </main>
-
+<!-- Page heading -->
+<div class="mb-6">
+  <h1 class="text-2xl font-bold text-slate-900">Dashboard</h1>
+  <p class="text-sm text-slate-500 mt-1">Welcome back, <?= $_adminName ?>. Here's what's happening.</p>
 </div>
 
-<?php require_once __DIR__ . "/../includes/footer.php"; ?>
+<!-- ── Stat Cards ──────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
+  <?php
+  $cards = [
+    ['label'=>'Fish',       'val'=>$stats['fish'],       'icon'=>'🐠','color'=>'bg-sky-50 text-sky-700',    'link'=>'/admin/fish.php'],
+    ['label'=>'Categories', 'val'=>$stats['categories'], 'icon'=>'🏷️','color'=>'bg-indigo-50 text-indigo-700','link'=>'/admin/fish-categories.php'],
+    ['label'=>'Products',   'val'=>$stats['products'],   'icon'=>'🪸','color'=>'bg-teal-50 text-teal-700',   'link'=>'/admin/products.php'],
+    ['label'=>'Tailoring',  'val'=>$stats['tailoring'],  'icon'=>'✂️','color'=>'bg-pink-50 text-pink-700',   'link'=>'/admin/tailoring.php'],
+    ['label'=>'Gallery',    'val'=>$stats['gallery'],     'icon'=>'🖼️','color'=>'bg-amber-50 text-amber-700', 'link'=>'/admin/gallery.php'],
+    ['label'=>'Enquiries',  'val'=>$stats['enquiries'],  'icon'=>'📧','color'=>'bg-red-50 text-red-700',     'link'=>'#'],
+  ];
+  foreach ($cards as $c):
+  ?>
+  <a href="<?= BASE_URL . $c['link'] ?>"
+     class="<?= $c['color'] ?> rounded-2xl p-5 flex flex-col gap-3 shadow-sm hover:shadow-md transition group">
+    <div class="flex items-center justify-between">
+      <span class="text-3xl"><?= $c['icon'] ?></span>
+      <svg class="w-4 h-4 opacity-40 group-hover:opacity-80 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+      </svg>
+    </div>
+    <div>
+      <p class="text-3xl font-bold"><?= $c['val'] ?></p>
+      <p class="text-sm font-medium opacity-70"><?= $c['label'] ?></p>
+    </div>
+  </a>
+  <?php endforeach; ?>
+</div>
+
+<!-- ── Quick Actions ──────────────────────────────────────── -->
+<div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 mb-8">
+  <h2 class="text-base font-semibold text-slate-800 mb-4">Quick Actions</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+    <?php
+    $actions = [
+      ['href'=>'/admin/fish.php',           'label'=>'Add New Fish',    'icon'=>'🐠'],
+      ['href'=>'/admin/fish-categories.php','label'=>'Add Category',    'icon'=>'🏷️'],
+      ['href'=>'/admin/products.php',       'label'=>'Add Product',     'icon'=>'🪸'],
+      ['href'=>'/admin/tailoring.php',      'label'=>'Add Service',     'icon'=>'✂️'],
+      ['href'=>'/admin/gallery.php',        'label'=>'Upload Image',    'icon'=>'📷'],
+      ['href'=>'/',                          'label'=>'View Website',    'icon'=>'🌐'],
+    ];
+    foreach ($actions as $a):
+    ?>
+    <a href="<?= BASE_URL . $a['href'] ?>"
+       class="flex items-center gap-2 px-4 py-3 bg-slate-50 hover:bg-sky-50 hover:text-sky-700 rounded-xl text-sm font-medium transition border border-slate-200 hover:border-sky-200">
+      <span><?= $a['icon'] ?></span><?= $a['label'] ?>
+    </a>
+    <?php endforeach; ?>
+  </div>
+</div>
+
+<!-- ── Recent Fish ──────────────────────────────────────────── -->
+<?php if (!empty($recentFish)): ?>
+<div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-base font-semibold text-slate-800">Recently Added Fish</h2>
+    <a href="<?= BASE_URL ?>/admin/fish.php" class="text-sm text-sky-600 hover:underline">View all →</a>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead>
+        <tr class="text-left text-xs text-slate-500 uppercase tracking-wide border-b border-slate-100">
+          <th class="pb-2 font-medium">Name</th>
+          <th class="pb-2 font-medium">Category</th>
+          <th class="pb-2 font-medium">Price</th>
+          <th class="pb-2 font-medium">Added</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        <?php foreach ($recentFish as $f): ?>
+        <tr>
+          <td class="py-2.5 font-medium text-slate-800"><?= htmlspecialchars($f['name'], ENT_QUOTES, 'UTF-8') ?></td>
+          <td class="py-2.5 text-slate-500"><?= htmlspecialchars($f['category'] ?? '—', ENT_QUOTES, 'UTF-8') ?></td>
+          <td class="py-2.5 text-slate-700">
+            ₹<?= number_format($f['price_min'], 0) ?>
+            <?= $f['price_max'] != $f['price_min'] ? ' – ₹' . number_format($f['price_max'], 0) : '' ?>
+          </td>
+          <td class="py-2.5 text-slate-400"><?= date('d M', strtotime($f['created_at'])) ?></td>
+        </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+</div>
+<?php endif; ?>
+
+<?php include __DIR__ . '/admin_layout_foot.php'; ?>

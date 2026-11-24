@@ -1,788 +1,257 @@
-
 <?php
-session_start();
+require_once __DIR__ . '/admin_header.php';
+$pageTitle   = 'Fish Management | Aqua Galaxy Admin';
+$currentPage = 'fish';
 
-require_once __DIR__ . "/../config/app.php";
+$error = ''; $success = '';
 
-// Check admin authentication
-if (!isset($_SESSION["admin_id"])) {
-    header("Location: " . BASE_URL . "/admin/login.php");
-    exit;
+function fishSlug(string $n): string {
+    return trim(preg_replace('/[^a-z0-9]+/','-',strtolower(trim($n))),'-');
 }
 
-require_once __DIR__ . "/../config/database.php";
-
-// Generate a CSRF token for secure delete requests
-if (empty($_SESSION["csrf_token"])) {
-    $_SESSION["csrf_token"] = bin2hex(random_bytes(32));
-}
-
-$pageTitle = "Fish Management | Aqua Galaxy";
-
-$categories = [];
-$fishListings = [];
-$error = "";
-$success = "";
-
-// Generate a URL-friendly slug
-function createFishSlug(string $name): string
-{
-    $slug = strtolower(trim($name));
-    $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
-
-    return trim($slug, '-');
-}
-
-// Handle messages after redirects
-if (isset($_GET["created"]) && $_GET["created"] === "1") {
-    $success = "Fish listing saved successfully!";
-}
-
-if (isset($_GET["deleted"]) && $_GET["deleted"] === "1") {
-    $success = "Fish listing deleted successfully!";
-}
-
-if (isset($_GET["delete_error"])) {
-    $deleteErrors = [
-        "invalid" => "Invalid fish selected for deletion.",
-        "notfound" => "The selected fish could not be found.",
-        "security" => "Security verification failed. Please try again.",
-        "failed" => "Unable to delete the fish. It may be linked to other records."
+// ── Handle messages from redirects ───────────────────────────
+if (isset($_GET['created'])) $success = 'Fish added successfully!';
+if (isset($_GET['deleted'])) $success = 'Fish deleted.';
+if (isset($_GET['delete_error'])) {
+    $errMap = [
+        'invalid'  => 'Invalid fish selected.',
+        'notfound' => 'Fish not found.',
+        'security' => 'Security check failed.',
+        'failed'   => 'Could not delete — fish may be linked to other records.',
     ];
-
-    $error = $deleteErrors[$_GET["delete_error"]]
-        ?? "An error occurred while deleting the fish.";
+    $error = $errMap[$_GET['delete_error']] ?? 'An error occurred.';
 }
 
-// Save a new fish listing
-if ($_SERVER["REQUEST_METHOD"] === "POST") {
+// ── Load categories ──────────────────────────────────────────
+$categories = [];
+try {
+    $categories = $pdo->query("SELECT id,name FROM fish_categories WHERE status=1 ORDER BY name")->fetchAll();
+} catch (PDOException $e) {}
 
-    $name = trim($_POST["name"] ?? "");
-
-    $categoryId = filter_var(
-        $_POST["category_id"] ?? null,
-        FILTER_VALIDATE_INT
-    );
-
-    $description = trim($_POST["description"] ?? "");
-    $pricingType = $_POST["pricing_type"] ?? "fixed";
-    $priceMin = $_POST["price_min"] ?? "";
-    $priceMax = $_POST["price_max"] ?? "";
-    $careLevel = $_POST["care_level"] ?? "";
-    $tankSize = trim($_POST["tank_size"] ?? "");
-    $temperature = trim($_POST["temperature"] ?? "");
-    $food = trim($_POST["food"] ?? "");
-
-    if ($name === "" || strlen($name) > 150) {
-        $error = "Enter a fish name of up to 150 characters.";
-
-    } elseif (!$categoryId || $categoryId < 1) {
-        $error = "Please select a valid fish category.";
-
-    } elseif (strlen($description) > 5000) {
-        $error = "Description must be 5000 characters or fewer.";
-
-    } elseif (!in_array($pricingType, ["fixed", "range"], true)) {
-        $error = "Select a valid pricing type.";
-
-    } elseif (
-        !is_numeric($priceMin) ||
-        !is_finite((float) $priceMin) ||
-        (float) $priceMin < 0 ||
-        (float) $priceMin > 9999999999999.99
-    ) {
-        $error = "Enter a valid non-negative price.";
-
-    } elseif (
-        $pricingType === "range" &&
-        (
-            $priceMax === "" ||
-            !is_numeric($priceMax) ||
-            !is_finite((float) $priceMax) ||
-            (float) $priceMax < (float) $priceMin ||
-            (float) $priceMax > 9999999999999.99
-        )
-    ) {
-        $error = "Maximum price must be at least the minimum price.";
-
-    } elseif (!in_array($careLevel, ["easy", "medium", "hard"], true)) {
-        $error = "Please select a valid care level.";
-
-    } elseif (
-        strlen($tankSize) > 100 ||
-        strlen($temperature) > 100 ||
-        strlen($food) > 255
-    ) {
-        $error = "One or more care details exceed the allowed length.";
-
+// ── Handle create ────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'] ?? '')) {
+        $error = 'Security check failed. Please try again.';
     } else {
+        $name        = trim($_POST['name'] ?? '');
+        $catId       = filter_var($_POST['category_id'] ?? null, FILTER_VALIDATE_INT);
+        $desc        = trim($_POST['description'] ?? '');
+        $pricingType = $_POST['pricing_type'] ?? 'fixed';
+        $priceMin    = $_POST['price_min'] ?? '';
+        $priceMax    = $_POST['price_max'] ?? '';
+        $careLevel   = $_POST['care_level'] ?? '';
+        $tankSize    = trim($_POST['tank_size'] ?? '');
+        $temperature = trim($_POST['temperature'] ?? '');
+        $food        = trim($_POST['food'] ?? '');
 
-        $slug = createFishSlug($name);
-
-        if ($slug === "") {
-            $error = "Use a fish name containing English letters or numbers.";
-
-        } else {
-
-            $min = round((float) $priceMin, 2);
-
-            $max = $pricingType === "fixed"
-                ? $min
-                : round((float) $priceMax, 2);
-
-            try {
-
-                // Verify the selected category is active
-                $categoryStmt = $pdo->prepare(
-                    "SELECT id
-                     FROM fish_categories
-                     WHERE id = :id AND status = 1"
-                );
-
-                $categoryStmt->execute([
-                    "id" => $categoryId
-                ]);
-
-                if (!$categoryStmt->fetch()) {
-                    $error = "The selected category is unavailable.";
-
-                } else {
-
-                    $stmt = $pdo->prepare(
-                        "INSERT INTO fish (
-                            category_id,
-                            name,
-                            slug,
-                            description,
-                            price_min,
-                            price_max,
-                            care_level,
-                            tank_size,
-                            temperature,
-                            food,
-                            status
-                        ) VALUES (
-                            :category_id,
-                            :name,
-                            :slug,
-                            :description,
-                            :price_min,
-                            :price_max,
-                            :care_level,
-                            :tank_size,
-                            :temperature,
-                            :food,
-                            1
-                        )"
-                    );
-
-                    $stmt->execute([
-                        "category_id" => $categoryId,
-                        "name" => $name,
-                        "slug" => $slug,
-                        "description" => $description !== ""
-                            ? $description : null,
-                        "price_min" => $min,
-                        "price_max" => $max,
-                        "care_level" => $careLevel,
-                        "tank_size" => $tankSize !== ""
-                            ? $tankSize : null,
-                        "temperature" => $temperature !== ""
-                            ? $temperature : null,
-                        "food" => $food !== ""
-                            ? $food : null
-                    ]);
-
-                    header(
-                        "Location: " . BASE_URL .
-                        "/admin/fish.php?created=1"
-                    );
-                    exit;
-                }
-
-            } catch (PDOException $e) {
-
-                if ($e->getCode() === "23000") {
-                    $error = "A fish with this URL slug already exists. Try a more specific name.";
-                } else {
-                    error_log("Fish creation failed: " . $e->getMessage());
-                    $error = "Unable to save the fish. Please try again.";
+        if ($name === '' || strlen($name) > 150)        { $error = 'Fish name required (max 150 chars).'; }
+        elseif (!$catId)                                { $error = 'Please select a category.'; }
+        elseif (!is_numeric($priceMin) || $priceMin < 0){ $error = 'Enter a valid min price.'; }
+        elseif (!in_array($careLevel,['easy','medium','hard'],true)) { $error = 'Select a care level.'; }
+        else {
+            $min = round((float)$priceMin, 2);
+            $max = $pricingType === 'range' ? round((float)$priceMax, 2) : $min;
+            if ($pricingType === 'range' && $max < $min) { $error = 'Max price must be ≥ min price.'; }
+            else {
+                $slug = fishSlug($name);
+                if ($slug === '') { $error = 'Use English letters/numbers in the name.'; }
+                else {
+                    try {
+                        $pdo->prepare("INSERT INTO fish (category_id,name,slug,description,price_min,price_max,care_level,tank_size,temperature,food,status,created_at)
+                                       VALUES (:c,:n,:s,:d,:pmin,:pmax,:cl,:ts,:tp,:fd,1,NOW())")
+                            ->execute(['c'=>$catId,'n'=>$name,'s'=>$slug,
+                                       'd'=>$desc!==''?$desc:null,
+                                       'pmin'=>$min,'pmax'=>$max,'cl'=>$careLevel,
+                                       'ts'=>$tankSize!==''?$tankSize:null,
+                                       'tp'=>$temperature!==''?$temperature:null,
+                                       'fd'=>$food!==''?$food:null]);
+                        header('Location: ' . BASE_URL . '/admin/fish.php?created=1');
+                        exit;
+                    } catch (PDOException $e) {
+                        $error = $e->getCode()==='23000'
+                            ? 'A fish with this name already exists.'
+                            : 'Could not save fish.';
+                    }
                 }
             }
         }
     }
 }
 
-// Load active categories
+// ── Load fish list ───────────────────────────────────────────
+$fishList = [];
 try {
+    $fishList = $pdo->query("SELECT f.*,fc.name AS cat_name
+                             FROM fish f
+                             LEFT JOIN fish_categories fc ON f.category_id=fc.id
+                             ORDER BY f.created_at DESC")->fetchAll();
+} catch (PDOException $e) {}
 
-    $stmt = $pdo->query(
-        "SELECT id, name
-         FROM fish_categories
-         WHERE status = 1
-         ORDER BY name ASC"
-    );
-
-    $categories = $stmt->fetchAll();
-
-} catch (PDOException $e) {
-
-    error_log("Fish category loading failed: " . $e->getMessage());
-    $error = "Unable to load fish categories. Please try again.";
-}
-
-// Load all fish listings
-try {
-
-    $stmt = $pdo->query(
-        "SELECT
-            fish.id,
-            fish.name,
-            fish.slug,
-            fish.description,
-            fish.price_min,
-            fish.price_max,
-            fish.care_level,
-            fish.tank_size,
-            fish.temperature,
-            fish.food,
-            fish.status,
-            fish_categories.name AS category_name
-         FROM fish
-         INNER JOIN fish_categories
-            ON fish.category_id = fish_categories.id
-         ORDER BY fish.id DESC"
-    );
-
-    $fishListings = $stmt->fetchAll();
-
-} catch (PDOException $e) {
-
-    error_log("Fish listing loading failed: " . $e->getMessage());
-    $error = "Unable to load saved fish listings.";
-}
-
-// Format prices
-function formatFishPrice($minimum, $maximum): string
-{
-    $min = (float) $minimum;
-    $max = (float) $maximum;
-
-    if ($min === $max) {
-        return "₹" . number_format($min, 2);
-    }
-
-    return "₹" . number_format($min, 2)
-        . " – ₹" . number_format($max, 2);
-}
-
-require_once __DIR__ . "/../includes/header.php";
+include __DIR__ . '/admin_layout_head.php';
 ?>
 
-<main class="min-h-screen bg-slate-50 px-4 py-8 sm:px-8">
-    <div class="max-w-7xl mx-auto">
-
-        <a
-            href="<?= BASE_URL ?>/admin/dashboard.php"
-            class="text-sm text-sky-600 hover:text-sky-700"
-        >
-            &larr; Back to Dashboard
-        </a>
-
-        <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 mt-4">
-            Fish Management
-        </h1>
-
-        <p class="text-slate-500 mt-2 mb-8">
-            Manage your ornamental fish listings, images and prices.
-        </p>
-
-        <!-- Add Fish Form -->
-        <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6 mb-8">
-
-            <h2 class="text-lg font-bold text-slate-900 mb-6">
-                Add New Fish
-            </h2>
-
-            <?php if ($error !== ""): ?>
-                <div
-                    role="alert"
-                    class="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700"
-                >
-                    <?= htmlspecialchars($error, ENT_QUOTES, "UTF-8") ?>
-                </div>
-            <?php endif; ?>
-
-            <?php if ($success !== ""): ?>
-                <div
-                    role="status"
-                    class="mb-5 rounded-lg border border-green-200 bg-green-50 p-4 text-green-700"
-                >
-                    <?= htmlspecialchars($success, ENT_QUOTES, "UTF-8") ?>
-                </div>
-            <?php endif; ?>
-
-            <form
-                method="POST"
-                action="<?= BASE_URL ?>/admin/fish.php"
-                class="grid grid-cols-1 md:grid-cols-2 gap-5"
-            >
-
-                <div>
-                    <label for="fish_name" class="block text-sm font-medium text-slate-700 mb-2">
-                        Fish Name
-                    </label>
-
-                    <input
-                        type="text"
-                        id="fish_name"
-                        name="name"
-                        maxlength="150"
-                        placeholder="e.g. Red Oranda Goldfish"
-                        required
-                        value="<?= htmlspecialchars($_POST["name"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                </div>
-
-                <div>
-                    <label for="category_id" class="block text-sm font-medium text-slate-700 mb-2">
-                        Fish Category
-                    </label>
-
-                    <select
-                        id="category_id"
-                        name="category_id"
-                        required
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                        <option value="">Select a category</option>
-
-                        <?php foreach ($categories as $category): ?>
-                            <option
-                                value="<?= (int) $category["id"] ?>"
-                                <?= (string) ($_POST["category_id"] ?? "") === (string) $category["id"] ? "selected" : "" ?>
-                            >
-                                <?= htmlspecialchars($category["name"], ENT_QUOTES, "UTF-8") ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-
-                    <?php if (empty($categories)): ?>
-                        <p class="text-sm text-amber-600 mt-2">
-                            Create an active fish category first.
-                        </p>
-                    <?php endif; ?>
-                </div>
-
-                <div class="md:col-span-2">
-                    <label for="description" class="block text-sm font-medium text-slate-700 mb-2">
-                        Description
-                    </label>
-
-                    <textarea
-                        id="description"
-                        name="description"
-                        rows="4"
-                        maxlength="5000"
-                        placeholder="Describe the fish..."
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    ><?= htmlspecialchars($_POST["description"] ?? "", ENT_QUOTES, "UTF-8") ?></textarea>
-                </div>
-
-                <div>
-                    <label for="pricing_type" class="block text-sm font-medium text-slate-700 mb-2">
-                        Pricing Type
-                    </label>
-
-                    <select
-                        id="pricing_type"
-                        name="pricing_type"
-                        required
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                        <option value="fixed" <?= ($_POST["pricing_type"] ?? "fixed") === "fixed" ? "selected" : "" ?>>
-                            Fixed Price
-                        </option>
-
-                        <option value="range" <?= ($_POST["pricing_type"] ?? "") === "range" ? "selected" : "" ?>>
-                            Price Range
-                        </option>
-                    </select>
-                </div>
-
-                <div>
-                    <label
-                        for="price_min"
-                        id="price_min_label"
-                        class="block text-sm font-medium text-slate-700 mb-2"
-                    >
-                        Price (₹)
-                    </label>
-
-                    <input
-                        type="number"
-                        id="price_min"
-                        name="price_min"
-                        min="0"
-                        step="0.01"
-                        placeholder="e.g. 200"
-                        required
-                        value="<?= htmlspecialchars($_POST["price_min"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                </div>
-
-                <div id="price_max_wrapper" class="hidden">
-                    <label for="price_max" class="block text-sm font-medium text-slate-700 mb-2">
-                        Maximum Price (₹)
-                    </label>
-
-                    <input
-                        type="number"
-                        id="price_max"
-                        name="price_max"
-                        min="0"
-                        step="0.01"
-                        placeholder="e.g. 500"
-                        value="<?= htmlspecialchars($_POST["price_max"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                        disabled
-                    >
-                </div>
-
-                <div>
-                    <label for="care_level" class="block text-sm font-medium text-slate-700 mb-2">
-                        Care Level
-                    </label>
-
-                    <select
-                        id="care_level"
-                        name="care_level"
-                        required
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                        <option value="">Select care level</option>
-                        <option value="easy" <?= ($_POST["care_level"] ?? "") === "easy" ? "selected" : "" ?>>Easy</option>
-                        <option value="medium" <?= ($_POST["care_level"] ?? "") === "medium" ? "selected" : "" ?>>Medium</option>
-                        <option value="hard" <?= ($_POST["care_level"] ?? "") === "hard" ? "selected" : "" ?>>Hard</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label for="tank_size" class="block text-sm font-medium text-slate-700 mb-2">
-                        Recommended Tank Size
-                    </label>
-
-                    <input
-                        type="text"
-                        id="tank_size"
-                        name="tank_size"
-                        maxlength="100"
-                        placeholder="e.g. 20 gallons"
-                        value="<?= htmlspecialchars($_POST["tank_size"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                </div>
-
-                <div>
-                    <label for="temperature" class="block text-sm font-medium text-slate-700 mb-2">
-                        Temperature
-                    </label>
-
-                    <input
-                        type="text"
-                        id="temperature"
-                        name="temperature"
-                        maxlength="100"
-                        placeholder="e.g. 20–24°C"
-                        value="<?= htmlspecialchars($_POST["temperature"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                </div>
-
-                <div>
-                    <label for="food" class="block text-sm font-medium text-slate-700 mb-2">
-                        Food
-                    </label>
-
-                    <input
-                        type="text"
-                        id="food"
-                        name="food"
-                        maxlength="255"
-                        placeholder="e.g. Pellets and flakes"
-                        value="<?= htmlspecialchars($_POST["food"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                        class="w-full rounded-lg border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                    >
-                </div>
-
-                <div class="md:col-span-2 pt-2">
-                    <button
-                        type="submit"
-                        class="w-full sm:w-auto rounded-lg bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-600 transition"
-                    >
-                        Save Fish
-                    </button>
-                </div>
-
-            </form>
-        </section>
-
-        <!-- Saved Fish Listings -->
-        <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-
-            <div class="p-5 sm:p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h2 class="text-lg font-bold text-slate-900">
-                        Saved Fish Listings
-                    </h2>
-
-                    <p class="text-sm text-slate-500 mt-1">
-                        Fish currently stored in your database.
-                    </p>
-                </div>
-
-                <span class="bg-sky-100 text-sky-700 px-3 py-2 rounded-full text-sm font-semibold">
-                    <?= count($fishListings) ?> total
-                </span>
-            </div>
-
-            <?php if (empty($fishListings)): ?>
-
-                <div class="p-8 text-center">
-                    <div class="text-4xl mb-3">🐠</div>
-
-                    <h3 class="font-semibold text-slate-900">
-                        No fish listings yet
-                    </h3>
-
-                    <p class="text-sm text-slate-500 mt-2">
-                        Add your first fish using the form above.
-                    </p>
-                </div>
-
-            <?php else: ?>
-
-                <!-- Desktop table -->
-                <div class="hidden md:block overflow-x-auto">
-                    <table class="w-full text-left">
-
-                        <thead class="bg-slate-50 text-sm text-slate-600">
-                            <tr>
-                                <th class="px-5 py-4">Fish</th>
-                                <th class="px-5 py-4">Category</th>
-                                <th class="px-5 py-4">Price</th>
-                                <th class="px-5 py-4">Care Level</th>
-                                <th class="px-5 py-4">Status</th>
-                                <th class="px-5 py-4">Actions</th>
-                            </tr>
-                        </thead>
-
-                        <tbody class="divide-y divide-slate-100">
-
-                            <?php foreach ($fishListings as $fish): ?>
-
-                                <tr class="hover:bg-slate-50">
-
-                                    <td class="px-5 py-4">
-                                        <p class="font-medium text-slate-900">
-                                            <?= htmlspecialchars($fish["name"], ENT_QUOTES, "UTF-8") ?>
-                                        </p>
-
-                                        <p class="text-xs text-slate-500 mt-1">
-                                            <?= htmlspecialchars($fish["slug"], ENT_QUOTES, "UTF-8") ?>
-                                        </p>
-                                    </td>
-
-                                    <td class="px-5 py-4 text-sm text-slate-600">
-                                        <?= htmlspecialchars($fish["category_name"], ENT_QUOTES, "UTF-8") ?>
-                                    </td>
-
-                                    <td class="px-5 py-4 text-sm font-semibold text-slate-900">
-                                        <?= htmlspecialchars(formatFishPrice($fish["price_min"], $fish["price_max"]), ENT_QUOTES, "UTF-8") ?>
-                                    </td>
-
-                                    <td class="px-5 py-4 text-sm text-slate-600">
-                                        <?= htmlspecialchars(ucfirst($fish["care_level"]), ENT_QUOTES, "UTF-8") ?>
-                                    </td>
-
-                                    <td class="px-5 py-4">
-                                        <?php if ((int) $fish["status"] === 1): ?>
-                                            <span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-semibold">
-                                                Active
-                                            </span>
-                                        <?php else: ?>
-                                            <span class="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold">
-                                                Inactive
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-
-                                    <!-- Desktop actions -->
-                                    <td class="px-5 py-4">
-                                        <div class="flex flex-wrap gap-2">
-
-                                            <a
-                                                href="<?= BASE_URL ?>/admin/edit-fish.php?id=<?= (int) $fish["id"] ?>"
-                                                class="inline-block rounded-lg bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-200 transition"
-                                            >
-                                                Edit
-                                            </a>
-
-                                            <form
-                                                method="POST"
-                                                action="<?= BASE_URL ?>/admin/delete-fish.php"
-                                                onsubmit="return confirm('Are you sure you want to delete this fish? This action cannot be undone.');"
-                                            >
-                                                <input
-                                                    type="hidden"
-                                                    name="fish_id"
-                                                    value="<?= (int) $fish["id"] ?>"
-                                                >
-
-                                                <input
-                                                    type="hidden"
-                                                    name="csrf_token"
-                                                    value="<?= htmlspecialchars($_SESSION["csrf_token"], ENT_QUOTES, "UTF-8") ?>"
-                                                >
-
-                                                <button
-                                                    type="submit"
-                                                    class="rounded-lg bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200 transition"
-                                                >
-                                                    Delete
-                                                </button>
-                                            </form>
-
-                                        </div>
-                                    </td>
-
-                                </tr>
-
-                            <?php endforeach; ?>
-
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Mobile cards -->
-                <div class="md:hidden divide-y divide-slate-100">
-
-                    <?php foreach ($fishListings as $fish): ?>
-
-                        <article class="p-5">
-
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <h3 class="font-semibold text-slate-900">
-                                        <?= htmlspecialchars($fish["name"], ENT_QUOTES, "UTF-8") ?>
-                                    </h3>
-
-                                    <p class="text-sm text-sky-700 mt-1">
-                                        <?= htmlspecialchars($fish["category_name"], ENT_QUOTES, "UTF-8") ?>
-                                    </p>
-                                </div>
-
-                                <?php if ((int) $fish["status"] === 1): ?>
-                                    <span class="shrink-0 bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs font-semibold">
-                                        Active
-                                    </span>
-                                <?php else: ?>
-                                    <span class="shrink-0 bg-slate-100 text-slate-600 px-2 py-1 rounded-full text-xs font-semibold">
-                                        Inactive
-                                    </span>
-                                <?php endif; ?>
-                            </div>
-
-                            <p class="text-lg font-bold text-slate-900 mt-3">
-                                <?= htmlspecialchars(formatFishPrice($fish["price_min"], $fish["price_max"]), ENT_QUOTES, "UTF-8") ?>
-                            </p>
-
-                            <p class="text-sm text-slate-600 mt-2">
-                                Care level:
-                                <?= htmlspecialchars(ucfirst($fish["care_level"]), ENT_QUOTES, "UTF-8") ?>
-                            </p>
-
-                            <?php if (!empty($fish["description"])): ?>
-                                <p class="text-sm text-slate-600 mt-2">
-                                    <?= htmlspecialchars($fish["description"], ENT_QUOTES, "UTF-8") ?>
-                                </p>
-                            <?php endif; ?>
-
-                            <!-- Mobile actions -->
-                            <div class="mt-4 flex flex-wrap gap-2">
-
-                                <a
-                                    href="<?= BASE_URL ?>/admin/edit-fish.php?id=<?= (int) $fish["id"] ?>"
-                                    class="inline-flex items-center justify-center rounded-lg bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-200 transition"
-                                >
-                                    Edit Fish
-                                </a>
-
-                                <form
-                                    method="POST"
-                                    action="<?= BASE_URL ?>/admin/delete-fish.php"
-                                    onsubmit="return confirm('Are you sure you want to delete this fish? This action cannot be undone.');"
-                                >
-                                    <input
-                                        type="hidden"
-                                        name="fish_id"
-                                        value="<?= (int) $fish["id"] ?>"
-                                    >
-
-                                    <input
-                                        type="hidden"
-                                        name="csrf_token"
-                                        value="<?= htmlspecialchars($_SESSION["csrf_token"], ENT_QUOTES, "UTF-8") ?>"
-                                    >
-
-                                    <button
-                                        type="submit"
-                                        class="inline-flex items-center justify-center rounded-lg bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200 transition"
-                                    >
-                                        Delete Fish
-                                    </button>
-                                </form>
-
-                            </div>
-
-                        </article>
-
-                    <?php endforeach; ?>
-
-                </div>
-
-            <?php endif; ?>
-
-        </section>
-
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-bold text-slate-900">Fish Management</h1>
+    <p class="text-sm text-slate-500 mt-1">Add and manage ornamental fish listings.</p>
+  </div>
+  <a href="<?= BASE_URL ?>/admin/fish-categories.php"
+     class="text-sm text-sky-600 hover:text-sky-800 font-medium border border-sky-200 hover:bg-sky-50 px-4 py-2 rounded-lg transition">
+    🏷️ Manage Categories
+  </a>
+</div>
+
+<?php if ($error): ?><div class="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($error,ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
+<?php if ($success): ?><div class="bg-green-50 border border-green-200 text-green-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($success,ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
+
+<!-- ── Add Form ────────────────────────────────────────────── -->
+<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-7">
+  <h2 class="text-base font-semibold text-slate-800 mb-5">＋ Add New Fish</h2>
+  <form method="POST" class="grid sm:grid-cols-2 gap-4">
+    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Fish Name <span class="text-red-500">*</span></label>
+      <input type="text" name="name" required maxlength="150"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. Clownfish">
     </div>
-</main>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Category <span class="text-red-500">*</span></label>
+      <select name="category_id" required class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+        <option value="">— Select —</option>
+        <?php foreach ($categories as $cat): ?>
+        <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['name'],ENT_QUOTES,'UTF-8') ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="sm:col-span-2">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+      <textarea name="description" rows="2" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm resize-none"
+                placeholder="Short description..."></textarea>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Pricing Type</label>
+      <select name="pricing_type" id="pricingType" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+        <option value="fixed">Fixed Price</option>
+        <option value="range">Price Range</option>
+      </select>
+    </div>
+    <div>
+      <label id="priceMinLabel" class="block text-sm font-medium text-slate-700 mb-1">Price (₹) <span class="text-red-500">*</span></label>
+      <input type="number" name="price_min" id="priceMin" step="0.01" min="0" required
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="0.00">
+    </div>
+    <div id="priceMaxWrapper" class="hidden">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Max Price (₹) <span class="text-red-500">*</span></label>
+      <input type="number" name="price_max" id="priceMax" step="0.01" min="0" disabled
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="0.00">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Care Level <span class="text-red-500">*</span></label>
+      <select name="care_level" required class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Tank Size</label>
+      <input type="text" name="tank_size" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. 20 gallons">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Temperature</label>
+      <input type="text" name="temperature" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. 24–28 °C">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Food</label>
+      <input type="text" name="food" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. Flakes, live food">
+    </div>
+    <div class="sm:col-span-2 pt-1">
+      <button type="submit"
+              class="w-full sm:w-auto px-6 py-3 bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white text-base font-bold rounded-xl transition shadow-md">
+        🐠 Add Fish
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Fish List ──────────────────────────────────────────── -->
+<div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+  <div class="px-5 py-4 border-b border-slate-100">
+    <h2 class="text-base font-semibold text-slate-800">All Fish (<?= count($fishList) ?>)</h2>
+  </div>
+  <?php if (empty($fishList)): ?>
+  <p class="text-slate-400 text-sm text-center py-10">No fish added yet — use the form above.</p>
+  <?php else: ?>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
+        <tr>
+          <th class="text-left px-5 py-3 font-medium">Name</th>
+          <th class="text-left px-5 py-3 font-medium hidden sm:table-cell">Category</th>
+          <th class="text-left px-5 py-3 font-medium">Price</th>
+          <th class="text-left px-5 py-3 font-medium hidden sm:table-cell">Care</th>
+          <th class="px-5 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <?php foreach ($fishList as $f): ?>
+        <tr class="hover:bg-slate-50 transition">
+          <td class="px-5 py-3 font-medium text-slate-900"><?= htmlspecialchars($f['name'],ENT_QUOTES,'UTF-8') ?></td>
+          <td class="px-5 py-3 text-slate-500 hidden sm:table-cell"><?= htmlspecialchars($f['cat_name']??'—',ENT_QUOTES,'UTF-8') ?></td>
+          <td class="px-5 py-3 text-slate-700">
+            ₹<?= number_format($f['price_min'],0) ?>
+            <?= $f['price_max'] != $f['price_min'] ? ' – ₹' . number_format($f['price_max'],0) : '' ?>
+          </td>
+          <td class="px-5 py-3 hidden sm:table-cell">
+            <?php $cl = $f['care_level'] ?? 'easy';
+                  $clr = ['easy'=>'bg-green-100 text-green-700','medium'=>'bg-amber-100 text-amber-700','hard'=>'bg-red-100 text-red-700'];
+            ?>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full <?= $clr[$cl] ?? $clr['easy'] ?>">
+              <?= ucfirst($cl) ?>
+            </span>
+          </td>
+          <td class="px-5 py-3 text-right">
+            <div class="flex items-center justify-end gap-2">
+              <a href="<?= BASE_URL ?>/admin/edit-fish.php?id=<?= $f['id'] ?>"
+                 class="text-xs font-medium text-sky-600 hover:text-sky-800 px-3 py-1 rounded-lg hover:bg-sky-50 transition">
+                Edit
+              </a>
+              <form method="POST" action="<?= BASE_URL ?>/admin/delete-fish.php"
+                    onsubmit="return confirm('Delete «<?= htmlspecialchars($f['name'],ENT_QUOTES,'UTF-8') ?>»?')">
+                <input type="hidden" name="fish_id" value="<?= $f['id'] ?>">
+                <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                <button type="submit"
+                        class="text-xs font-medium text-red-600 hover:text-red-800 px-3 py-1 rounded-lg hover:bg-red-50 transition">
+                  Delete
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+  <?php endif; ?>
+</div>
 
 <script>
-document.addEventListener("DOMContentLoaded", function () {
-    const pricingType = document.getElementById("pricing_type");
-    const minLabel = document.getElementById("price_min_label");
-    const maxWrapper = document.getElementById("price_max_wrapper");
-    const maxInput = document.getElementById("price_max");
-
-    function updatePricingFields() {
-        const isRange = pricingType.value === "range";
-
-        minLabel.textContent = isRange
-            ? "Minimum Price (₹)"
-            : "Price (₹)";
-
-        maxWrapper.classList.toggle("hidden", !isRange);
-        maxInput.disabled = !isRange;
-        maxInput.required = isRange;
-    }
-
-    pricingType.addEventListener("change", updatePricingFields);
-    updatePricingFields();
-});
+(function(){
+  const type = document.getElementById('pricingType');
+  const minLabel = document.getElementById('priceMinLabel');
+  const maxWrap = document.getElementById('priceMaxWrapper');
+  const maxInput = document.getElementById('priceMax');
+  function update(){
+    const isRange = type.value === 'range';
+    minLabel.textContent = (isRange ? 'Min Price (₹) *' : 'Price (₹) *');
+    maxWrap.classList.toggle('hidden', !isRange);
+    maxInput.disabled = !isRange;
+    maxInput.required = isRange;
+  }
+  type.addEventListener('change', update);
+  update();
+})();
 </script>
 
-</body>
-</html>
+<?php include __DIR__ . '/admin_layout_foot.php'; ?>

@@ -1,7 +1,15 @@
 <?php
 
 if (!defined('BASE_URL')) {
-    define('BASE_URL', '/Aqua_galaxy');
+    $docRoot = rtrim(str_replace('\\', '/', $_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
+    $projectRoot = rtrim(str_replace('\\', '/', dirname(__DIR__)), '/');
+
+    if ($docRoot !== '' && strpos($projectRoot, $docRoot) === 0) {
+        $base = substr($projectRoot, strlen($docRoot));
+        define('BASE_URL', $base === '' ? '' : $base);
+    } else {
+        define('BASE_URL', '/Aqua_galaxy');
+    }
 }
 
 // Prevent Windows Apache double-slash UNC network lag

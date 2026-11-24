@@ -1,309 +1,164 @@
-
 <?php
-session_start();
+require_once __DIR__ . '/admin_header.php';
+$pageTitle   = 'Fish Categories | Aqua Galaxy Admin';
+$currentPage = 'fish-categories';
 
-require_once __DIR__ . "/../config/app.php";
+// ── Handle Create / Delete ───────────────────────────────────
+$error = ''; $success = '';
 
-if (!isset($_SESSION["admin_id"])) {
-    header("Location: " . BASE_URL . "/admin/login.php");
-    exit;
+function catSlug(string $n): string {
+    return trim(preg_replace('/[^a-z0-9]+/','-',strtolower(trim($n))),'-');
 }
 
-require_once __DIR__ . "/../config/database.php";
-
-$pageTitle = "Fish Categories | Aqua Galaxy";
-$categories = [];
-$error = "";
-$success = "";
-
-// Generate a URL-friendly slug from the category name
-function createCategorySlug(string $name): string
-{
-    $slug = strtolower(trim($name));
-    $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
-    return trim($slug, '-');
-}
-
-// Process category creation
-if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $name = trim($_POST["name"] ?? "");
-    $description = trim($_POST["description"] ?? "");
-
-    if ($name === "" || strlen($name) > 100) {
-        $error = "Enter a category name of up to 100 characters.";
-    } elseif (strlen($description) > 1000) {
-        $error = "The description must be 1000 characters or fewer.";
-    } else {
-        $slug = createCategorySlug($name);
-
-        if ($slug === "") {
-            $error = "Use a category name containing English letters or numbers.";
-        } else {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['_action'] ?? 'create';
+    if (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'] ?? '')) {
+        $error = 'Security check failed. Please try again.';
+    } elseif ($action === 'delete') {
+        $delId = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT);
+        if ($delId) {
             try {
-                $stmt = $pdo->prepare(
-                    "INSERT INTO fish_categories
-                        (name, slug, description, status)
-                     VALUES
-                        (:name, :slug, :description, 1)"
-                );
-
-                $stmt->execute([
-                    "name" => $name,
-                    "slug" => $slug,
-                    "description" => $description !== "" ? $description : null
-                ]);
-
-                // Prevent the form from being submitted twice on refresh
-                header("Location: " . BASE_URL . "/admin/fish-categories.php?created=1");
-                exit;
-
-            } catch (PDOException $e) {
-                if ($e->getCode() === "23000") {
-                    $error = "A category with this name or URL slug already exists.";
+                // Prevent deleting category that has fish
+                $cnt = (int)$pdo->prepare("SELECT COUNT(*) FROM fish WHERE category_id=?")->execute([$delId]) ? 0 : 0;
+                $st = $pdo->prepare("SELECT COUNT(*) FROM fish WHERE category_id=:id");
+                $st->execute(['id'=>$delId]);
+                $cnt = (int)$st->fetchColumn();
+                if ($cnt > 0) {
+                    $error = "Cannot delete — this category has $cnt fish linked to it.";
                 } else {
-                    error_log("Fish category creation failed: " . $e->getMessage());
-                    $error = "Unable to create the category. Please try again.";
+                    $pdo->prepare("DELETE FROM fish_categories WHERE id=:id")->execute(['id'=>$delId]);
+                    header('Location: ' . BASE_URL . '/admin/fish-categories.php?deleted=1'); exit;
                 }
+            } catch (PDOException $e) { $error = 'Delete failed: ' . $e->getMessage(); }
+        }
+    } else {
+        // create
+        $name = trim($_POST['name'] ?? '');
+        $desc = trim($_POST['description'] ?? '');
+        $slug = catSlug($name);
+        if ($name === '' || strlen($name) > 100) { $error = 'Name required (max 100 chars).'; }
+        elseif ($slug === '')  { $error = 'Use English letters/numbers in the name.'; }
+        else {
+            try {
+                $pdo->prepare("INSERT INTO fish_categories (name,slug,description,status) VALUES (:n,:s,:d,1)")
+                    ->execute(['n'=>$name,'s'=>$slug,'d'=>$desc!==''?$desc:null]);
+                header('Location: ' . BASE_URL . '/admin/fish-categories.php?created=1'); exit;
+            } catch (PDOException $e) {
+                $error = $e->getCode()==='23000'
+                    ? 'A category with this name already exists.'
+                    : 'Could not save category.';
             }
         }
     }
 }
+if (isset($_GET['created'])) $success = 'Category created successfully!';
+if (isset($_GET['deleted'])) $success = 'Category deleted.';
 
-if (isset($_GET["created"]) && $_GET["created"] === "1") {
-    $success = "Fish category created successfully!";
-}
-
-// Load categories
+// ── Load list ────────────────────────────────────────────────
+$categories = [];
 try {
-    $stmt = $pdo->query(
-        "SELECT id, name, slug, description, status, created_at
-         FROM fish_categories
-         ORDER BY id DESC"
-    );
+    $categories = $pdo->query("SELECT fc.*, COUNT(f.id) AS fish_count
+                               FROM fish_categories fc
+                               LEFT JOIN fish f ON f.category_id=fc.id
+                               GROUP BY fc.id ORDER BY fc.id DESC")->fetchAll();
+} catch (PDOException $e) { $error = 'Could not load categories.'; }
 
-    $categories = $stmt->fetchAll();
-
-} catch (PDOException $e) {
-    error_log("Fish category listing failed: " . $e->getMessage());
-    $error = "Unable to load fish categories. Please try again.";
-}
-
-require_once __DIR__ . "/../includes/header.php";
+include __DIR__ . '/admin_layout_head.php';
 ?>
 
-<main class="min-h-screen bg-slate-50 px-4 py-8 sm:px-8">
+<div class="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-bold text-slate-900">Fish Categories</h1>
+    <p class="text-sm text-slate-500 mt-1">Organise your ornamental fish into categories.</p>
+  </div>
+</div>
 
-    <div class="max-w-7xl mx-auto">
+<?php if ($error): ?>
+<div class="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($error,ENT_QUOTES,'UTF-8') ?></div>
+<?php endif; ?>
+<?php if ($success): ?>
+<div class="bg-green-50 border border-green-200 text-green-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($success,ENT_QUOTES,'UTF-8') ?></div>
+<?php endif; ?>
 
-        <!-- Page Heading -->
-        <div class="mb-8">
-            <a href="<?= BASE_URL ?>/admin/dashboard.php"
-               class="text-sm text-sky-600 hover:text-sky-700">
-                ← Back to Dashboard
-            </a>
-
-            <h1 class="text-2xl sm:text-3xl font-bold text-slate-900 mt-3">
-                Fish Categories
-            </h1>
-
-            <p class="text-slate-500 mt-2">
-                Create and organize categories for your ornamental fish.
-            </p>
-        </div>
-
-        <!-- Feedback -->
-        <?php if ($error !== ""): ?>
-            <div role="alert" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">
-                <?= htmlspecialchars($error, ENT_QUOTES, "UTF-8") ?>
-            </div>
-        <?php endif; ?>
-
-        <?php if ($success !== ""): ?>
-            <div role="status" class="bg-green-50 border border-green-200 text-green-700 rounded-xl p-4 mb-6">
-                <?= htmlspecialchars($success, ENT_QUOTES, "UTF-8") ?>
-            </div>
-        <?php endif; ?>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-            <!-- Add Category Form -->
-            <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 sm:p-6">
-
-                <h2 class="text-lg font-bold text-slate-900">
-                    Add New Category
-                </h2>
-
-                <p class="text-sm text-slate-500 mt-1 mb-6">
-                    Enter a name and optional description.
-                </p>
-
-                <form method="POST" action="<?= BASE_URL ?>/admin/fish-categories.php" class="space-y-5">
-
-                    <div>
-                        <label for="name" class="block text-sm font-medium text-slate-700 mb-2">
-                            Category Name
-                        </label>
-
-                        <input
-                            type="text"
-                            id="name"
-                            name="name"
-                            maxlength="100"
-                            required
-                            placeholder="e.g. Goldfish"
-                            value="<?= htmlspecialchars($_POST["name"] ?? "", ENT_QUOTES, "UTF-8") ?>"
-                            class="w-full px-4 py-3 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                        >
-                    </div>
-
-                    <div>
-                        <label for="description" class="block text-sm font-medium text-slate-700 mb-2">
-                            Description <span class="text-slate-400">(Optional)</span>
-                        </label>
-
-                        <textarea
-                            id="description"
-                            name="description"
-                            rows="4"
-                            maxlength="1000"
-                            placeholder="Describe this fish category..."
-                            class="w-full px-4 py-3 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-400"
-                        ><?= htmlspecialchars($_POST["description"] ?? "", ENT_QUOTES, "UTF-8") ?></textarea>
-                    </div>
-
-                    <button
-                        type="submit"
-                        class="w-full bg-sky-500 hover:bg-sky-600 text-white font-semibold py-3 rounded-lg transition"
-                    >
-                        + Add Category
-                    </button>
-
-                </form>
-
-            </section>
-
-            <!-- Category List -->
-            <section class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-
-                <div class="p-5 sm:p-6 border-b border-slate-100 flex items-center justify-between gap-3">
-                    <div>
-                        <h2 class="text-lg font-bold text-slate-900">
-                            All Fish Categories
-                        </h2>
-                        <p class="text-sm text-slate-500 mt-1">
-                            Categories stored in your database.
-                        </p>
-                    </div>
-
-                    <span class="shrink-0 bg-sky-100 text-sky-700 px-3 py-2 rounded-full text-sm font-semibold">
-                        <?= count($categories) ?> total
-                    </span>
-                </div>
-
-                <?php if (empty($categories)): ?>
-
-                    <div class="px-6 py-12 text-center">
-                        <div class="text-5xl mb-4">🐠</div>
-                        <h3 class="text-lg font-semibold text-slate-900">
-                            No categories yet
-                        </h3>
-                        <p class="text-sm text-slate-500 mt-2">
-                            Create your first fish category using the form.
-                        </p>
-                    </div>
-
-                <?php else: ?>
-
-                    <!-- Desktop Table -->
-                    <div class="hidden md:block overflow-x-auto">
-                        <table class="w-full text-left">
-
-                            <thead class="bg-slate-50 text-slate-600 text-sm">
-                                <tr>
-                                    <th class="px-5 py-4 font-semibold">Category</th>
-                                    <th class="px-5 py-4 font-semibold">Slug</th>
-                                    <th class="px-5 py-4 font-semibold">Status</th>
-                                </tr>
-                            </thead>
-
-                            <tbody class="divide-y divide-slate-100">
-                                <?php foreach ($categories as $category): ?>
-                                    <tr class="hover:bg-slate-50">
-                                        <td class="px-5 py-4">
-                                            <p class="font-medium text-slate-900">
-                                                <?= htmlspecialchars($category["name"], ENT_QUOTES, "UTF-8") ?>
-                                            </p>
-                                            <p class="text-xs text-slate-500 mt-1">
-                                                <?= htmlspecialchars($category["description"] ?? "", ENT_QUOTES, "UTF-8") ?>
-                                            </p>
-                                        </td>
-
-                                        <td class="px-5 py-4 text-sm text-slate-600">
-                                            <?= htmlspecialchars($category["slug"], ENT_QUOTES, "UTF-8") ?>
-                                        </td>
-
-                                        <td class="px-5 py-4">
-                                            <?php if ((int) $category["status"] === 1): ?>
-                                                <span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-semibold">
-                                                    Active
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-semibold">
-                                                    Inactive
-                                                </span>
-                                            <?php endif; ?>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-
-                        </table>
-                    </div>
-
-                    <!-- Mobile Cards -->
-                    <div class="md:hidden divide-y divide-slate-100">
-                        <?php foreach ($categories as $category): ?>
-                            <article class="p-5">
-
-                                <div class="flex items-start justify-between gap-3">
-                                    <h3 class="font-semibold text-slate-900">
-                                        <?= htmlspecialchars($category["name"], ENT_QUOTES, "UTF-8") ?>
-                                    </h3>
-
-                                    <?php if ((int) $category["status"] === 1): ?>
-                                        <span class="bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs font-semibold">
-                                            Active
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="bg-slate-100 text-slate-600 px-2 py-1 rounded-full text-xs font-semibold">
-                                            Inactive
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-
-                                <p class="text-sm text-sky-600 mt-2">
-                                    <?= htmlspecialchars($category["slug"], ENT_QUOTES, "UTF-8") ?>
-                                </p>
-
-                                <?php if (!empty($category["description"])): ?>
-                                    <p class="text-sm text-slate-600 mt-2">
-                                        <?= htmlspecialchars($category["description"], ENT_QUOTES, "UTF-8") ?>
-                                    </p>
-                                <?php endif; ?>
-
-                            </article>
-                        <?php endforeach; ?>
-                    </div>
-
-                <?php endif; ?>
-
-            </section>
-
-        </div>
-
+<!-- ── Add Form ────────────────────────────────────────────── -->
+<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-7">
+  <h2 class="text-base font-semibold text-slate-800 mb-4">Add New Category</h2>
+  <form method="POST" class="grid sm:grid-cols-2 gap-4">
+    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+    <input type="hidden" name="_action" value="create">
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Category Name <span class="text-red-500">*</span></label>
+      <input type="text" name="name" required maxlength="100"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-sky-400"
+             placeholder="e.g. Goldfish">
     </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+      <input type="text" name="description" maxlength="500"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm"
+             placeholder="Short description (optional)">
+    </div>
+    <div class="sm:col-span-2">
+      <button type="submit"
+              class="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-lg transition">
+        ＋ Create Category
+      </button>
+    </div>
+  </form>
+</div>
 
-</main>
+<!-- ── Category List ──────────────────────────────────────── -->
+<div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+  <div class="px-5 py-4 border-b border-slate-100">
+    <h2 class="text-base font-semibold text-slate-800">All Categories (<?= count($categories) ?>)</h2>
+  </div>
+  <?php if (empty($categories)): ?>
+  <p class="text-slate-400 text-sm text-center py-10">No categories yet. Add one above.</p>
+  <?php else: ?>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="bg-slate-50 text-xs text-slate-500 uppercase tracking-wide">
+        <tr>
+          <th class="text-left px-5 py-3 font-medium">Name</th>
+          <th class="text-left px-5 py-3 font-medium">Slug</th>
+          <th class="text-left px-5 py-3 font-medium">Fish</th>
+          <th class="text-left px-5 py-3 font-medium">Status</th>
+          <th class="px-5 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <?php foreach ($categories as $cat): ?>
+        <tr class="hover:bg-slate-50 transition">
+          <td class="px-5 py-3 font-medium text-slate-900"><?= htmlspecialchars($cat['name'],ENT_QUOTES,'UTF-8') ?></td>
+          <td class="px-5 py-3 text-slate-400 font-mono text-xs"><?= htmlspecialchars($cat['slug'],ENT_QUOTES,'UTF-8') ?></td>
+          <td class="px-5 py-3">
+            <span class="inline-block bg-sky-100 text-sky-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+              <?= $cat['fish_count'] ?>
+            </span>
+          </td>
+          <td class="px-5 py-3">
+            <span class="inline-block text-xs font-semibold px-2 py-0.5 rounded-full
+                         <?= $cat['status'] ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500' ?>">
+              <?= $cat['status'] ? 'Active' : 'Hidden' ?>
+            </span>
+          </td>
+          <td class="px-5 py-3 text-right">
+            <form method="POST" onsubmit="return confirm('Delete «<?= htmlspecialchars($cat['name'],ENT_QUOTES,'UTF-8') ?>»?')">
+              <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+              <input type="hidden" name="_action" value="delete">
+              <input type="hidden" name="id" value="<?= $cat['id'] ?>">
+              <button type="submit"
+                      class="text-xs text-red-600 hover:text-red-800 font-medium px-3 py-1 rounded-lg hover:bg-red-50 transition">
+                Delete
+              </button>
+            </form>
+          </td>
+        </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+  <?php endif; ?>
+</div>
 
-</body>
-</html>
+<?php include __DIR__ . '/admin_layout_foot.php'; ?>

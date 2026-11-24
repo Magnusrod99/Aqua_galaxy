@@ -4,10 +4,15 @@ ini_set('display_errors', 1);
 
 $t0 = microtime(true);
 $probe = @fsockopen("127.0.0.1", 3306, $err, $str, 0.5);
-echo "fsockopen to 127.0.0.1:3306: " . ($probe ? "OPEN" : "CLOSED ($err: $str)") . " in " . round((microtime(true) - $t0) * 1000, 2) . "ms\n";
+echo "fsockopen: " . ($probe ? "OPEN" : "CLOSED") . " in " . round((microtime(true) - $t0) * 1000, 2) . "ms<br>";
 if ($probe) fclose($probe);
 
 $t1 = microtime(true);
-$probe2 = @fsockopen("localhost", 3306, $err2, $str2, 0.5);
-echo "fsockopen to localhost:3306: " . ($probe2 ? "OPEN" : "CLOSED ($err2: $str2)") . " in " . round((microtime(true) - $t1) * 1000, 2) . "ms\n";
-if ($probe2) fclose($probe2);
+try {
+    $pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=aqua_galaxy;charset=utf8mb4", "root", "", [
+        PDO::ATTR_TIMEOUT => 2
+    ]);
+    echo "PDO connected to aqua_galaxy in " . round((microtime(true) - $t1) * 1000, 2) . "ms";
+} catch (Throwable $e) {
+    echo "PDO error in " . round((microtime(true) - $t1) * 1000, 2) . "ms: " . $e->getMessage();
+}

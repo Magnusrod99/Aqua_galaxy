@@ -1,449 +1,158 @@
-
 <?php
-session_start();
+require_once __DIR__ . '/admin_header.php';
+$pageTitle   = 'Edit Fish | Aqua Galaxy Admin';
+$currentPage = 'fish';
 
-if (!isset($_SESSION["admin_id"])) {
-    header("Location: login.php");
+$fishId = filter_var($_GET['id'] ?? null, FILTER_VALIDATE_INT);
+if (!$fishId || $fishId < 1) {
+    header('Location: ' . BASE_URL . '/admin/fish.php');
     exit;
 }
 
-require_once __DIR__ . "/../config/database.php";
-require_once __DIR__ . "/../config/app.php";
+$error = ''; $success = '';
 
-$error = "";
-$success = "";
-
-// Get the selected fish ID from the URL
-$fishId = filter_input(INPUT_GET, "id", FILTER_VALIDATE_INT);
-
-if (!$fishId || $fishId < 1) {
-    exit("Invalid fish ID.");
+function editFishSlug(string $n): string {
+    return trim(preg_replace('/[^a-z0-9]+/','-',strtolower(trim($n))),'-');
 }
 
-// Load the existing fish details
-$stmt = $pdo->prepare(
-    "SELECT * FROM fish WHERE id = :id LIMIT 1"
-);
-$stmt->execute(["id" => $fishId]);
-
-$fish = $stmt->fetch();
-
+// Load fish
+$st = $pdo->prepare("SELECT * FROM fish WHERE id=:id LIMIT 1");
+$st->execute(['id'=>$fishId]);
+$fish = $st->fetch();
 if (!$fish) {
-    exit("Fish not found.");
+    header('Location: ' . BASE_URL . '/admin/fish.php');
+    exit;
 }
 
-// Generate a URL-friendly slug
-function createFishSlug($name)
-{
-    $slug = strtolower(trim($name));
-    $slug = preg_replace('/[^a-z0-9]+/', '-', $slug);
-    return trim($slug, '-');
-}
+// Load categories
+$categories = $pdo->query("SELECT id,name FROM fish_categories WHERE status=1 ORDER BY name")->fetchAll();
 
-// Handle the form submission
-if ($_SERVER["REQUEST_METHOD"] === "POST") {
+// Handle update
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $name        = trim($_POST['name'] ?? '');
+    $catId       = filter_var($_POST['category_id'] ?? null, FILTER_VALIDATE_INT);
+    $desc        = trim($_POST['description'] ?? '');
+    $priceMin    = $_POST['price_min'] ?? '';
+    $priceMax    = $_POST['price_max'] ?? '';
+    $careLevel   = $_POST['care_level'] ?? '';
+    $tankSize    = trim($_POST['tank_size'] ?? '');
+    $temperature = trim($_POST['temperature'] ?? '');
+    $food        = trim($_POST['food'] ?? '');
 
-    $name = trim($_POST["name"] ?? "");
-    $categoryId = filter_input(
-        INPUT_POST,
-        "category_id",
-        FILTER_VALIDATE_INT
-    );
-    $description = trim($_POST["description"] ?? "");
-    $priceMin = filter_input(
-        INPUT_POST,
-        "price_min",
-        FILTER_VALIDATE_FLOAT
-    );
-    $priceMax = filter_input(
-        INPUT_POST,
-        "price_max",
-        FILTER_VALIDATE_FLOAT
-    );
-    $careLevel = $_POST["care_level"] ?? "";
-    $tankSize = trim($_POST["tank_size"] ?? "");
-    $temperature = trim($_POST["temperature"] ?? "");
-    $food = trim($_POST["food"] ?? "");
-
-    // Validate the submitted data
-    if (
-        $name === "" ||
-        !$categoryId ||
-        $priceMin === false ||
-        $priceMin === null ||
-        $priceMax === false ||
-        $priceMax === null ||
-        !is_finite((float) $priceMin) ||
-        !is_finite((float) $priceMax) ||
-        $priceMin < 0 ||
-        $priceMax < 0 ||
-        $priceMin > $priceMax ||
-        !in_array($careLevel, ["easy", "medium", "hard"], true)
-    ) {
-        $error = "Please enter valid fish details and prices.";
-    } else {
-
-        // Check that the selected category is active
-        $checkCategory = $pdo->prepare(
-            "SELECT id FROM fish_categories
-             WHERE id = :id AND status = 1"
-        );
-
-        $checkCategory->execute([
-            "id" => $categoryId
-        ]);
-
-        if (!$checkCategory->fetch()) {
-            $error = "Please select a valid active category.";
-        } else {
-
-            $slug = createFishSlug($name);
-
-            if ($slug === "") {
-                $error = "Please enter a valid fish name.";
-            } else {
-                try {
-
-                    // Update the existing fish record
-                    $update = $pdo->prepare(
-                        "UPDATE fish
-                         SET category_id = :category_id,
-                             name = :name,
-                             slug = :slug,
-                             description = :description,
-                             price_min = :price_min,
-                             price_max = :price_max,
-                             care_level = :care_level,
-                             tank_size = :tank_size,
-                             temperature = :temperature,
-                             food = :food,
-                             updated_at = CURRENT_TIMESTAMP
-                         WHERE id = :id"
-                    );
-
-                    $update->execute([
-                        "category_id" => $categoryId,
-                        "name" => $name,
-                        "slug" => $slug,
-                        "description" => $description,
-                        "price_min" => $priceMin,
-                        "price_max" => $priceMax,
-                        "care_level" => $careLevel,
-                        "tank_size" => $tankSize,
-                        "temperature" => $temperature,
-                        "food" => $food,
-                        "id" => $fishId
-                    ]);
-
-                    // Redirect to prevent duplicate form submissions
-                    header(
-                        "Location: " . BASE_URL .
-                        "/admin/edit-fish.php?id=" .
-                        $fishId . "&updated=1"
-                    );
-                    exit;
-
-                } catch (PDOException $e) {
-
-                    if ($e->getCode() === "23000") {
-                        $error =
-                            "A fish with this name or slug may already exist.";
-                    } else {
-                        error_log($e->getMessage());
-                        $error =
-                            "Unable to update the fish. Please try again.";
-                    }
-                }
-            }
-        }
+    if ($name === '' || strlen($name) > 150) { $error = 'Fish name required (max 150 chars).'; }
+    elseif (!$catId) { $error = 'Please select a category.'; }
+    elseif (!is_numeric($priceMin) || $priceMin < 0) { $error = 'Enter a valid min price.'; }
+    elseif (!is_numeric($priceMax) || $priceMax < $priceMin) { $error = 'Max price must be ≥ min price.'; }
+    elseif (!in_array($careLevel, ['easy','medium','hard'], true)) { $error = 'Select a care level.'; }
+    else {
+        $slug = editFishSlug($name);
+        try {
+            $pdo->prepare("UPDATE fish SET category_id=:c,name=:n,slug=:s,description=:d,
+                           price_min=:pmin,price_max=:pmax,care_level=:cl,tank_size=:ts,
+                           temperature=:tp,food=:fd,updated_at=NOW() WHERE id=:id")
+                ->execute(['c'=>$catId,'n'=>$name,'s'=>$slug,'d'=>$desc!==''?$desc:null,
+                           'pmin'=>$priceMin,'pmax'=>$priceMax,'cl'=>$careLevel,
+                           'ts'=>$tankSize!==''?$tankSize:null,'tp'=>$temperature!==''?$temperature:null,
+                           'fd'=>$food!==''?$food:null,'id'=>$fishId]);
+            header('Location: ' . BASE_URL . '/admin/edit-fish.php?id=' . $fishId . '&ok=1');
+            exit;
+        } catch (PDOException $e) { $error = 'Update failed: ' . $e->getMessage(); }
     }
-
-    // Preserve submitted values if validation fails
-    $fish = array_merge($fish, [
-        "name" => $name,
-        "category_id" => $categoryId ?: $fish["category_id"],
-        "description" => $description,
-        "price_min" =>
-            $priceMin !== false && $priceMin !== null
-                ? $priceMin
-                : $fish["price_min"],
-        "price_max" =>
-            $priceMax !== false && $priceMax !== null
-                ? $priceMax
-                : $fish["price_max"],
-        "care_level" => $careLevel,
-        "tank_size" => $tankSize,
-        "temperature" => $temperature,
-        "food" => $food
-    ]);
+    // Preserve submitted values on error
+    $fish = array_merge($fish, compact('name','catId','desc','priceMin','priceMax','careLevel','tankSize','temperature','food'));
+    $fish['category_id'] = $catId ?? $fish['category_id'];
 }
+if (isset($_GET['ok'])) $success = 'Fish updated successfully!';
 
-// Display the success message after redirect
-if (
-    isset($_GET["updated"]) &&
-    $_GET["updated"] === "1"
-) {
-    $success = "Fish details updated successfully!";
-}
-
-// Load active fish categories
-$categoryStmt = $pdo->query(
-    "SELECT id, name FROM fish_categories
-     WHERE status = 1
-     ORDER BY name ASC"
-);
-
-$categories = $categoryStmt->fetchAll();
-
-$pageTitle = "Edit Fish";
-require_once __DIR__ . "/../includes/header.php";
+include __DIR__ . '/admin_layout_head.php';
 ?>
 
-<?php require_once __DIR__ . "/../includes/navbar.php"; ?>
+<div class="mb-6 flex items-center gap-3">
+  <a href="<?= BASE_URL ?>/admin/fish.php"
+     class="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition">
+    ←
+  </a>
+  <div>
+    <h1 class="text-2xl font-bold text-slate-900">Edit Fish</h1>
+    <p class="text-sm text-slate-500 mt-0.5">Editing: <?= htmlspecialchars($fish['name'],ENT_QUOTES,'UTF-8') ?></p>
+  </div>
+</div>
 
-<main class="min-h-screen bg-gray-100 px-4 py-8">
-    <div class="mx-auto max-w-3xl">
+<?php if ($error): ?><div class="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($error,ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
+<?php if ($success): ?><div class="bg-green-50 border border-green-200 text-green-700 rounded-xl px-4 py-3 mb-5 text-sm"><?= htmlspecialchars($success,ENT_QUOTES,'UTF-8') ?></div><?php endif; ?>
 
-        <div class="mb-6">
-            <h1 class="text-2xl font-bold text-gray-800">
-                Edit Fish
-            </h1>
-
-            <p class="mt-1 text-sm text-gray-600">
-                Update the details of
-                <?= htmlspecialchars($fish["name"]) ?>.
-            </p>
-        </div>
-
-        <?php if ($success !== ""): ?>
-            <div
-                class="mb-4 rounded-lg bg-green-100 p-3 text-green-700"
-                role="status"
-            >
-                <?= htmlspecialchars($success) ?>
-            </div>
-        <?php endif; ?>
-
-        <?php if ($error !== ""): ?>
-            <div
-                class="mb-4 rounded-lg bg-red-100 p-3 text-red-700"
-                role="alert"
-            >
-                <?= htmlspecialchars($error) ?>
-            </div>
-        <?php endif; ?>
-
-        <form
-            method="POST"
-            action="<?= BASE_URL ?>/admin/edit-fish.php?id=<?= (int) $fish["id"] ?>"
-            class="space-y-5 rounded-xl bg-white p-5 shadow-sm sm:p-7"
-        >
-
-            <div>
-                <label
-                    for="name"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Fish Name
-                </label>
-
-                <input
-                    type="text"
-                    id="name"
-                    name="name"
-                    maxlength="255"
-                    value="<?= htmlspecialchars($fish["name"]) ?>"
-                    required
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-            </div>
-
-            <div>
-                <label
-                    for="category_id"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Category
-                </label>
-
-                <select
-                    id="category_id"
-                    name="category_id"
-                    required
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-                    <?php foreach ($categories as $category): ?>
-                        <option
-                            value="<?= (int) $category["id"] ?>"
-                            <?= (int) $fish["category_id"] === (int) $category["id"] ? "selected" : "" ?>
-                        >
-                            <?= htmlspecialchars($category["name"]) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-
-            <div>
-                <label
-                    for="description"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Description
-                </label>
-
-                <textarea
-                    id="description"
-                    name="description"
-                    rows="4"
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                ><?= htmlspecialchars($fish["description"] ?? "") ?></textarea>
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-
-                <div>
-                    <label
-                        for="price_min"
-                        class="mb-1 block font-medium text-gray-700"
-                    >
-                        Minimum Price (₹)
-                    </label>
-
-                    <input
-                        type="number"
-                        id="price_min"
-                        name="price_min"
-                        min="0"
-                        step="0.01"
-                        value="<?= htmlspecialchars((string) $fish["price_min"]) ?>"
-                        required
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                    >
-                </div>
-
-                <div>
-                    <label
-                        for="price_max"
-                        class="mb-1 block font-medium text-gray-700"
-                    >
-                        Maximum Price (₹)
-                    </label>
-
-                    <input
-                        type="number"
-                        id="price_max"
-                        name="price_max"
-                        min="0"
-                        step="0.01"
-                        value="<?= htmlspecialchars((string) $fish["price_max"]) ?>"
-                        required
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                    >
-                </div>
-
-            </div>
-
-            <p class="text-sm text-gray-500">
-                For a fixed price, enter the same minimum and maximum price.
-            </p>
-
-            <div>
-                <label
-                    for="care_level"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Care Level
-                </label>
-
-                <select
-                    id="care_level"
-                    name="care_level"
-                    required
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-                    <?php foreach (["easy", "medium", "hard"] as $level): ?>
-                        <option
-                            value="<?= $level ?>"
-                            <?= $fish["care_level"] === $level ? "selected" : "" ?>
-                        >
-                            <?= ucfirst($level) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-
-            <div>
-                <label
-                    for="tank_size"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Tank Size
-                </label>
-
-                <input
-                    type="text"
-                    id="tank_size"
-                    name="tank_size"
-                    value="<?= htmlspecialchars($fish["tank_size"] ?? "") ?>"
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-            </div>
-
-            <div>
-                <label
-                    for="temperature"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Temperature
-                </label>
-
-                <input
-                    type="text"
-                    id="temperature"
-                    name="temperature"
-                    value="<?= htmlspecialchars($fish["temperature"] ?? "") ?>"
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-            </div>
-
-            <div>
-                <label
-                    for="food"
-                    class="mb-1 block font-medium text-gray-700"
-                >
-                    Food
-                </label>
-
-                <input
-                    type="text"
-                    id="food"
-                    name="food"
-                    value="<?= htmlspecialchars($fish["food"] ?? "") ?>"
-                    class="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-            </div>
-
-            <div class="flex flex-col gap-3 sm:flex-row">
-
-                <button
-                    type="submit"
-                    class="rounded-lg bg-blue-600 px-5 py-2.5 font-semibold text-white hover:bg-blue-700"
-                >
-                    Save Changes
-                </button>
-
-                <a
-                    href="<?= BASE_URL ?>/admin/fish.php"
-                    class="rounded-lg border border-gray-300 px-5 py-2.5 text-center font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                    Cancel
-                </a>
-
-            </div>
-
-        </form>
-
+<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+  <form method="POST" class="grid sm:grid-cols-2 gap-5">
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Fish Name <span class="text-red-500">*</span></label>
+      <input type="text" name="name" required maxlength="150"
+             value="<?= htmlspecialchars($fish['name'],ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm">
     </div>
-</main>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Category <span class="text-red-500">*</span></label>
+      <select name="category_id" required class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+        <?php foreach ($categories as $cat): ?>
+        <option value="<?= $cat['id'] ?>" <?= $fish['category_id']==$cat['id'] ? 'selected' : '' ?>>
+          <?= htmlspecialchars($cat['name'],ENT_QUOTES,'UTF-8') ?>
+        </option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="sm:col-span-2">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+      <textarea name="description" rows="3" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm resize-none"><?= htmlspecialchars($fish['description']??'',ENT_QUOTES,'UTF-8') ?></textarea>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Min Price (₹) <span class="text-red-500">*</span></label>
+      <input type="number" name="price_min" step="0.01" min="0" required
+             value="<?= htmlspecialchars((string)$fish['price_min'],ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Max Price (₹) <span class="text-red-500">*</span>
+        <span class="text-xs text-slate-400">(same as min for fixed price)</span></label>
+      <input type="number" name="price_max" step="0.01" min="0" required
+             value="<?= htmlspecialchars((string)$fish['price_max'],ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Care Level <span class="text-red-500">*</span></label>
+      <select name="care_level" required class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm bg-white">
+        <?php foreach (['easy'=>'Easy','medium'=>'Medium','hard'=>'Hard'] as $val=>$lbl): ?>
+        <option value="<?= $val ?>" <?= $fish['care_level']===$val ? 'selected' : '' ?>><?= $lbl ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Tank Size</label>
+      <input type="text" name="tank_size"
+             value="<?= htmlspecialchars($fish['tank_size']??'',ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. 20 gallons">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Temperature</label>
+      <input type="text" name="temperature"
+             value="<?= htmlspecialchars($fish['temperature']??'',ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. 24–28 °C">
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Food</label>
+      <input type="text" name="food"
+             value="<?= htmlspecialchars($fish['food']??'',ENT_QUOTES,'UTF-8') ?>"
+             class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm" placeholder="e.g. Flakes, live food">
+    </div>
+    <div class="sm:col-span-2 flex gap-3 pt-2">
+      <button type="submit"
+              class="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-lg transition">
+        💾 Save Changes
+      </button>
+      <a href="<?= BASE_URL ?>/admin/fish.php"
+         class="px-5 py-2.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium rounded-lg transition">
+        Cancel
+      </a>
+    </div>
+  </form>
+</div>
 
-<?php require_once __DIR__ . "/../includes/footer.php"; ?>
+<?php include __DIR__ . '/admin_layout_foot.php'; ?>
